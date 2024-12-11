@@ -9,11 +9,24 @@ import os
 from requests.cookies import RequestsCookieJar
 import string
 from urllib.parse import urlparse, parse_qs
-
+import unidecode
+from itertools import cycle
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class OCB:
-    def __init__(self, username, password, account_number, device_id):
-        self.file = f"db/users/{account_number}.json"
-        self.cookies_file = f"db/cookies/{account_number}.json"
+    def __init__(self, username, password, account_number,proxy_list=None):
+        self.proxy_list = proxy_list
+        if self.proxy_list:
+            self.proxy_info = random.choice(self.proxy_list)
+            proxy_host, proxy_port, username_proxy, password_proxy = self.proxy_info.split(':')
+            self.proxies = {
+                'http': f'http://{username_proxy}:{password_proxy}@{proxy_host}:{proxy_port}',
+                'https': f'http://{username_proxy}:{password_proxy}@{proxy_host}:{proxy_port}'
+            }
+        else:
+            self.proxies = None
+        self.file = f"data/ocb/users/{account_number}.json"
+        self.cookies_file = f"data/ocb/cookies/{account_number}.json"
         self.session = requests.Session()
         self.state = self.get_imei()
         self.nonce = self.state
@@ -36,7 +49,6 @@ class OCB:
             self.username = username
             self.password = password
             self.account_number = account_number
-            self.device_id = device_id
             self.fullname = None
             self.auth_token = None
             self.refresh_token = None
@@ -49,7 +61,6 @@ class OCB:
             self.username = username
             self.password = password
             self.account_number = account_number
-            self.device_id = device_id
             self.save_data()
             
 
@@ -63,6 +74,7 @@ class OCB:
         self.nonce = self.get_imei()
         self.code_verifier = ''.join(random.choices(string.ascii_letters + string.digits, k=96))
         self.code_challenge = self.get_code_challenge(self.code_verifier)
+        loginOCB(self)
     def save_data(self):
         data = {
             'username': self.username,
@@ -75,18 +87,17 @@ class OCB:
             'is_login': self.is_login,
             'auth_token': self.auth_token,
             'refresh_token': self.refresh_token,
-            'device_id': self.device_id,
             'pending_transfer': self.pending_transfer,
             'user_agent': self.user_agent
         }
-        with open(f"db/users/{self.account_number}.json", 'w') as file:
+        with open(f"data/ocb/users/{self.account_number}.json", 'w') as file:
             json.dump(data, file)
     def set_token(self, data):
         self.auth_token = data['access_token']
         self.refresh_token = data['refresh_token']
         self.time_set_token = time.time()
     def parse_data(self):
-        with open(f"db/users/{self.account_number}.json", 'r') as file:
+        with open(f"data/ocb/users/{self.account_number}.json", 'r') as file:
             data = json.load(file)
             self.username = data['username']
             self.password = data['password']
@@ -98,7 +109,6 @@ class OCB:
             self.is_login = data['is_login']
             self.auth_token = data['auth_token']
             self.refresh_token = data['refresh_token']
-            self.device_id = data['device_id']
             self.pending_transfer = data['pending_transfer']
             self.user_agent = data['user_agent']
     def save_cookies(self,cookie_jar):
@@ -112,6 +122,36 @@ class OCB:
                 return
         except (FileNotFoundError, json.decoder.JSONDecodeError):
             return requests.cookies.RequestsCookieJar()
+    # def change_proxy(self):
+    #         print('change_proxy')
+    #         if not self.proxy_cycle:
+    #             print("No proxies available. Setting self.proxies to None.")
+    #             self.proxies = None
+    #             return
+    #         self.proxy_info = next(self.proxy_cycle)  # Lấy proxy kế tiếp từ vòng lặp
+    #         proxy_host, proxy_port, username_proxy, password_proxy = self.proxy_info.split(':')
+    #         self.proxies = {
+    #             'http': f'http://{username_proxy}:{password_proxy}@{proxy_host}:{proxy_port}',
+    #             'https': f'http://{username_proxy}:{password_proxy}@{proxy_host}:{proxy_port}'
+    #         }
+    #         print(f"New proxy: {self.proxies}")
+    def curl_post(self, url,headers,data,proxies=None,allow_redirects=False):
+        try:
+            
+            response = self.session.post(url, headers=headers, data=data,proxies=proxies,verify=False,timeout=7,allow_redirects=allow_redirects)
+            return response
+        except Exception as e:
+            # print('reason change proxy',e)
+            # self.change_proxy()
+            return None
+    def curl_get(self, url,headers,proxies=None):
+        try:
+            response = self.session.get(url, headers=headers,proxies=proxies,verify=False,timeout=7)
+            return response
+        except Exception as e:
+            # print('reason change proxy',e)
+            # self.change_proxy()
+            return None
     def get_login_url(self):
         headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -145,7 +185,7 @@ class OCB:
         url = f"{base_url}?{query_string}"
 
         self.load_cookies()
-        res = self.session.get(url, headers=headers)
+        res = self.curl_get(url, headers=headers,proxies=self.proxies)
         # print(url,res)
         # print(res.url)
         session_state,code = self.get_session_and_code(res.url)
@@ -178,7 +218,7 @@ class OCB:
             'otpChoice': 'PUSH_DEVICE',
         }
         self.load_cookies()
-        res = self.session.post(request_url,headers=headers, data=data)
+        res = self.curl_post(request_url,headers=headers, data=data,proxies=self.proxies)
         # with open("request_login.html", "w", encoding="utf-8") as file:
         #     file.write(res.text)
         self.save_cookies(self.session.cookies)
@@ -212,7 +252,7 @@ class OCB:
             'rememberMe': 'on'
         }
         self.load_cookies()
-        res = self.session.post(login_url,headers=headers, data=data)
+        res = self.curl_post(login_url,headers=headers, data=data,proxies=self.proxies)
         # with open("login_request.html", "w", encoding="utf-8") as file:
         #     file.write(res.text)
         self.save_cookies(self.session.cookies)
@@ -281,6 +321,7 @@ class OCB:
             }
         elif 'Xác thực đăng nhập' in result:
             request_login_result,request_url = self.send_request_login(url)
+            print('Xác thực đăng nhập')
             if 'Chúng tôi đã gửi yêu cầu xác thực tới thiết bị đăng ký của bạn, vui lòng kiểm tra và xác thực trong 2 phút.' in request_login_result:
                    return {
                         'success': True,
@@ -324,7 +365,7 @@ class OCB:
             'oob-authn-action': 'confirmation-poll'
         }
         self.load_cookies()
-        res = self.session.post(url, headers=headers,data=data)
+        res = self.curl_post(url, headers=headers,data=data,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         result = res.text
 
@@ -349,7 +390,7 @@ class OCB:
             'oob-authn-action': 'confirmation-continue'
         }
         self.load_cookies()
-        response = self.session.post(url, headers=headers,data=data,allow_redirects=False)
+        response = self.curl_post(url, headers=headers,data=data,allow_redirects=False,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         if response.status_code == 302:
             new_url = response.headers.get('Location')
@@ -384,7 +425,7 @@ class OCB:
 
         url = 'https://identity-omni.ocb.com.vn/auth/realms/backbase/protocol/openid-connect/token'
         self.load_cookies()
-        response = self.session.post(url, headers=headers, data=data)
+        response = self.curl_post(url, headers=headers, data=data,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         result = response.json()
 
@@ -419,7 +460,7 @@ class OCB:
         
         self.load_cookies()
         # print(url)
-        res = self.session.get(url, headers=headers)
+        res = self.curl_get(url, headers=headers,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         # print(res.url)
         # with open("logout.html", "w", encoding="utf-8") as file:
@@ -453,7 +494,7 @@ class OCB:
             'ui_locales': 'vi'
         }
         self.load_cookies()
-        response = self.session.post('https://identity-omni.ocb.com.vn/auth/realms/backbase/protocol/openid-connect/token', data=data, headers=headers)
+        response = self.curl_post('https://identity-omni.ocb.com.vn/auth/realms/backbase/protocol/openid-connect/token', data=data, headers=headers,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         result = response.json()
         if 'access_token' in result:
@@ -482,7 +523,7 @@ class OCB:
 
         self.load_cookies()
         url = 'https://ocbomni.ocb.com.vn/api/arrangement-manager/client-api/v2/arrangement-views/account-overview/groups/current-account-vnd?_limit=100'
-        response = self.session.get(url, headers=headers)
+        response = self.curl_get(url, headers=headers,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         if response.status_code == 200:
             result = response.json()
@@ -516,7 +557,7 @@ class OCB:
 
         url = f'https://ocbomni.ocb.com.vn/api/sync-dis/client-api/v1/transactions/refresh/arrangements'
         self.load_cookies()
-        response = self.session.post(url, headers=headers, data=payload)
+        response = self.curl_post(url, headers=headers, data=payload,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         return response
     def sync(self):
@@ -547,7 +588,7 @@ class OCB:
 
         url = f'https://ocbomni.ocb.com.vn/api/bb-ingestion-service/client-api/v2/accounts/sync'
         self.load_cookies()
-        response = self.session.post(url, headers=headers, data=payload)
+        response = self.curl_post(url, headers=headers, data=payload,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         return response
     def get_transactions(self, from_date="2022-11-15", to_date="2022-12-03",limit=100):
@@ -599,7 +640,7 @@ class OCB:
 
         url = f'https://ocbomni.ocb.com.vn/api/transaction-manager/client-api/v2/transactions?bookingDateGreaterThan={from_date}&bookingDateLessThan={to_date}&arrangementId={self.id}&from={page}&size={limit}&orderBy=bookingDate&direction=DESC'
         self.load_cookies()
-        response = self.session.get(url, headers=headers)
+        response = self.curl_get(url, headers=headers,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         # with open("transaction"+str(page)+".html", "w", encoding="utf-8") as file:
         #     file.write(response.text)
@@ -712,11 +753,179 @@ class OCB:
         "Mozilla/5.0 (X11; CrOS x86_64 9901.77.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.97 Safari/537.36"
                         ]
         return random.choice(user_agent_array)
+    def check_bank_name_in(self, ben_account_number):
+        headers = {
+        'Accept': 'application/json',
+        'Accept-Language': 'vi',
+        'Authorization': f'Bearer {self.auth_token}',
+        'Connection': 'keep-alive',
+        'Cookie': 'BIGipServer~Omni_4.0~Omni_4.0_Pool=175270410.20480.0000; _ga=GA1.1.569260134.1730308709; TS01f4a2ea=014bffbef0e3341402ddc29a65cf0264ff88421e42d8e0c2dbb79e9e247ca0b023dfe2585d140b5388c4a0309e464914e8d5c78730d37b2b1cbc7beeb5725b3d37be973167; TS01e1866a=014bffbef0ac0ab2c3626e75f199d10c105e034aa8ae77ddcd182d8f79a80268755ab4f90cccb8bb1c97e78cbd54692d47a3078576; USER_CONTEXT=eyJraWQiOiJaNXB5dkxcL3FMYUFyR3ZiTkY3Qm11UGVQU1Q4R0I5UHBPR0RvRnBlbmIxOD0iLCJjdHkiOiJKV1QiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwiYWxnIjoiZGlyIn0..OTOdmkQAnoaPm5MsE1kDEw.gUS55wP5peyVWi9xIz2O49dO11Fi7XAo21E7z-iV8nJ12XOuT0Hn-kL7HK-XDfSAVmoZR-UiK76cGuH51kJu9bVbW0N3pJ1KQfxb8yuHwjXrqXzYswK0CmM_8WWq_tCqeVyKQKH1gvCbI9Hv8fzeOb2c21PnUUea-Y7GoR3cN_e5IPHOro3WGp6-N9D_4dby9hgxB_60fzZ1W2m4nL2qpMPuo0N3ISPvB87gTldQ-yVDZ472IriqcXtNoXTTIC4TsyaxD4dzCepEZ0mPcPCcTIBaS0_8_BZ1WD7Ia64Q4a_X6JpGfwg1Vj-s7CTZvM9d.EvUojthAum-N7i9faP-_tg; _ga_NJJ7PHJKV8=GS1.1.1730317030.3.1.1730317031.59.0.0; XSRF-TOKEN=9d57d065-5803-4d5e-a280-ef4f9f3e2404; TS01e1866a=014bffbef031e20e9fc98d327cfb58aef1091147abcd2693a28e811b6e902ebd34c56b1224a5e326e8c9fd2eebc07f1c91af336515',
+        'Lang': 'vi',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+        'sec-ch-ua': '"Chromium";v="130", "Microsoft Edge";v="130", "Not?A_Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+        }
 
-    # Implement other methods as needed
+
+        url = f'https://ocbomni.ocb.com.vn/api/account-integration-service/client-api/v1/accounts/inquiry-accounts'
+        data = {
+            'accountOrPhone': ben_account_number,
+            'transferType':'INTERNAL_TRANSFER'
+        }
+        self.load_cookies()
+        response = self.curl_post(url,headers=headers, data=data,proxies=self.proxies)
+        self.save_cookies(self.session.cookies)
+        # with open("transaction"+str(page)+".html", "w", encoding="utf-8") as file:
+        #     file.write(response.text)
+        if response.status_code == 200:
+            result = response.json()
+            return result
+        else:
+            return {
+            'success': False,
+            'message': 'Please relogin!',
+            'code': 401,
+            'data':response.json()
+        }
+    def mapping_bank_code(self,bank_name):
+        with open('banks.json','r', encoding='utf-8') as f:
+            data = json.load(f)
+        for bank in data['data']:
+            if bank['shortName'].lower() == bank_name.lower():
+                return bank['bin']
+    def mapping_bank_code_ocb(self,bank_name):
+        with open('banks.json','r', encoding='utf-8') as f:
+            data = json.load(f)
+        for bank in data['data']:
+            if bank['shortName'].lower() == bank_name.lower():
+                with open('ocb.json','r', encoding='utf-8') as f:
+                    data_2 = json.load(f)
+                for bank_2 in data_2:
+                    if bank_2['napasBankCode'] == bank['bin']:
+                        return bank_2['coreBankId']
+    def check_bank_name_out(self, ben_account_number,bank_name):
+        bank_code = self.mapping_bank_code(bank_name)
+        coreBankId = self.mapping_bank_code_ocb(bank_name)
+        headers = {
+        'Accept': 'application/json',
+        'Accept-Language': 'vi',
+        'Authorization': f'Bearer {self.auth_token}',
+        'Connection': 'keep-alive',
+        'Content-Type': 'application/json',
+        'Lang': 'vi',
+        'Origin': 'https://ocbomni.ocb.com.vn',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        'X-XSRF-TOKEN': 'e5a10522-01d1-4aec-9fe7-7b2983171411',
+        'sec-ch-ua': '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+        }
+
+
+        url = f'https://ocbomni.ocb.com.vn/api/account-integration-service/client-api/v1/accounts/inquiry-accounts'
+        data = json.dumps({
+            'accountOrPhone': ben_account_number,
+            'bankCode':bank_code,
+            'coreBankId':coreBankId,
+            'transferType':'NAPAS_ACCOUNT_NUMBER'
+        })
+        response = requests.post(url,headers=headers, data=data,proxies=self.proxies)
+        # self.save_cookies(self.session.cookies)
+        # with open("transaction"+str(page)+".html", "w", encoding="utf-8") as file:
+        #     file.write(response.text)
+        if response.status_code == 200:
+            result = response.json()
+            return result
+        else:
+            return {
+            'success': False,
+            'message': 'Please relogin!',
+            'code': 401
+        }
+    def convert_to_uppercase_no_accents(self,text):
+        # Remove accents
+        no_accents = unidecode.unidecode(text)
+        # Convert to uppercase
+        return no_accents.upper()
+    def get_bank_name(self, ben_account_number, bank_name):
+        self.do_refresh_token()
+        
+        if bank_name == 'OCB':
+            result =  self.check_bank_name_in(ben_account_number)
+        else:
+            result =  self.check_bank_name_out(ben_account_number,bank_name)
+        if 'accountHolderName' not in result:
+            print(result)
+            return self.login_ocb(ben_account_number, bank_name)
+        return result
+    def check_bank_name(self,ben_account_number, bank_name, ben_account_name):
+        get_name_from_account = self.get_bank_name(ben_account_number, bank_name)
+        print('get_name_from_account_ocb',get_name_from_account)
+        if 'accountHolderName' in get_name_from_account:
+            input_name = self.convert_to_uppercase_no_accents(ben_account_name).lower().strip()
+            output_name = get_name_from_account['accountHolderName'].lower().strip()
+            if output_name == input_name or output_name.strip().replace(' ','') == input_name.strip().replace(' ',''):
+                return True
+            else:
+                return output_name
+        return False
+    def login_ocb(self,ben_account_number=None, bank_name=None):
+        login = self.do_login()
+        if login and 'success' in login and login['success']:
+            print('waiting')
+            if 'waiting' in login and login['waiting']:
+                url = login['url']
+                i = 1
+                status = "PENDING"
+                while True:
+                    if i >= 60:
+                        return {
+                            'code':408,
+                            'message':'Time out confirm!',
+                        }
+                    cr = self.check_session(url)
+                    if self.is_json(cr):
+                        check = json.loads(cr)
+                        url = check['actionUrl']
+                        status = check['status']
+                        if status == "PENDING":
+                            time.sleep(2)
+                        else:
+                            print('login success')
+                            break
+                    i += 1
+            elif 'session_state' in login:
+                print('login success')
+                session_state = login['session_state']
+                code = login['code']
+            else:
+                print('login success')
+        else:
+            return login
+        if not code:
+            continue_check = self.continue_check_session(url)
+                # Extract the code from the URL
+            code = continue_check.split('code=')[1]
+        try:
+            token = self.get_token(code, "https://ocbomni.ocb.com.vn/en-US/select-context")
+            if token:
+                return self.get_bank_name(ben_account_number, bank_name)
+            else:
+                return None
+        except Exception as e:
+            return None
+
 def loginOCB(user):
     session_state,code = None,None
     refresh_token = user.do_refresh_token()
+    # print(refresh_token)
     if 'access_token' not in refresh_token:
         login = user.do_login()
         print(login)
@@ -816,6 +1025,7 @@ def sync_ocb(user, start, end,limit):
         'data': ary_data,
         'code': 200
     }
+
 
 def refresh_token_user(user):
     return user.do_refresh_token()
