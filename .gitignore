@@ -99,4 +99,7 @@ Cargo.lock
 *.bk
 
 test.py
-db/*/*.json
+data/*/*.json
+data/data/*/*/*.json
+/*/*.json
+data/ocb/*/*/*.json
