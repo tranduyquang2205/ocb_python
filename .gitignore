@@ -103,3 +103,5 @@ data/*/*.json
 data/data/*/*/*.json
 /*/*.json
 data/ocb/*/*/*.json
+data/ocb/cookies/*.json
+data/ocb/users/*.json
