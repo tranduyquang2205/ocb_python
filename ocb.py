@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs
 import unidecode
 from itertools import cycle
 import urllib3
+import pickle
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class OCB:
     def __init__(self, username, password, account_number,proxy_list=None):
@@ -26,7 +27,7 @@ class OCB:
         else:
             self.proxies = None
         self.file = f"data/ocb/users/{account_number}.json"
-        self.cookies_file = f"data/ocb/cookies/{account_number}.json"
+        self.cookies_file = f"data/ocb/cookies/{account_number}.pkl"
         self.session = requests.Session()
         self.state = self.get_imei()
         self.nonce = self.state
@@ -44,6 +45,7 @@ class OCB:
         self.balance = None
         self.id = None
         self.fullname = None
+        self.serviceAgreementId = None
         self.pending_transfer = []
         if not os.path.exists(self.file):
             self.username = username
@@ -111,17 +113,55 @@ class OCB:
             self.refresh_token = data['refresh_token']
             self.pending_transfer = data['pending_transfer']
             self.user_agent = data['user_agent']
-    def save_cookies(self,cookie_jar):
-        with open(self.cookies_file, 'w') as f:
-            json.dump(cookie_jar.get_dict(), f)
-    def load_cookies(self):
-        try:
-            with open(self.cookies_file, 'r') as f:
-                cookies = json.load(f)
-                self.session.cookies.update(cookies)
-                return
-        except (FileNotFoundError, json.decoder.JSONDecodeError):
-            return requests.cookies.RequestsCookieJar()
+    # def save_cookies(self, cookie_jar):
+    #     # Load existing cookies from the file if it exists
+    #     if os.path.exists(self.cookies_file):
+    #         with open(self.cookies_file, 'r') as f:
+    #             try:
+    #                 existing_cookies = json.load(f)
+    #             except json.JSONDecodeError:
+    #                 existing_cookies = {}
+    #     else:
+    #         existing_cookies = {}
+
+    #     # Update the existing cookies with the new cookies
+    #     updated_cookies = {**existing_cookies, **cookie_jar.get_dict()}
+
+    #     # Save the updated cookies back to the file
+    #     with open(self.cookies_file, 'w') as f:
+    #         json.dump(updated_cookies, f)
+    # def load_cookies(self):
+    #     try:
+    #         with open(self.cookies_file, 'r') as f:
+    #             cookies = json.load(f)
+    #             self.session.cookies.update(cookies)
+    #             # self.session.cookies.clear()
+    #             return
+    #     except (FileNotFoundError, json.decoder.JSONDecodeError):
+    #         return requests.cookies.RequestsCookieJar()
+    # def save_cookies(self,cookie_jar):
+    #     cookies = []
+    #     for cookie in self.session.cookies:
+    #         cookies.append({
+    #             'Name': cookie.name,
+    #             'Value': cookie.value,
+    #             'Domain': cookie.domain,
+    #             'Path': cookie.path,
+    #             'Expires': cookie.expires,
+    #             'Secure': cookie.secure,
+    #             'HttpOnly': cookie.has_nonstandard_attr('HttpOnly')
+    #         })
+    #     with open(self.cookies_file, 'w') as file:
+    #         json.dump(cookies, file, indent=4)
+
+    # def load_cookies(self):
+    #     try:
+    #         with open(self.cookies_file, 'r') as file:
+    #             cookies = json.load(file)
+    #             for cookie in cookies:
+    #                 self.session.cookies.set(cookie['Name'], cookie['Value'])
+    #     except (FileNotFoundError, json.decoder.JSONDecodeError):
+    #         return requests.cookies.RequestsCookieJar()
     # def change_proxy(self):
     #         print('change_proxy')
     #         if not self.proxy_cycle:
@@ -135,6 +175,20 @@ class OCB:
     #             'https': f'http://{username_proxy}:{password_proxy}@{proxy_host}:{proxy_port}'
     #         }
     #         print(f"New proxy: {self.proxies}")
+    def save_cookies(self,s):
+        """Save the current session to a file."""
+        with open(self.cookies_file, 'wb') as file:
+            pickle.dump(self.session.cookies, file)
+    def load_cookies(self):
+        """Load a session from a file."""
+        try:
+            with open(self.cookies_file, 'rb') as file:
+                loaded_cookies = pickle.load(file)
+            self.session.cookies.update(loaded_cookies)
+        except FileNotFoundError:
+            print(f"File not found.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
     def curl_post(self, url,headers,data,proxies=None,allow_redirects=False):
         try:
             
@@ -188,16 +242,21 @@ class OCB:
         res = self.curl_get(url, headers=headers,proxies=self.proxies)
         # print(url,res)
         # print(res.url)
+        if res:
+            session_state,code = self.get_session_and_code(res.url)
+        else:
+            return self.get_login_url()
         session_state,code = self.get_session_and_code(res.url)
         if session_state and code:
-            return self.get_login_url()
+            return session_state,code
         # with open("login_url.html", "w", encoding="utf-8") as file:
         #     file.write(res.text)
         self.save_cookies(self.session.cookies)
         pattern = r'action="(.*)" method'
         matches = re.search(pattern, res.text)
         url = matches.group(1).replace("amp;", "&").replace("&&", "&")
-        return url
+        return url,False
+
     def send_request_login(self,request_url):
         headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -229,36 +288,37 @@ class OCB:
         return result,url
         
     def do_login(self):
-        login_url = self.get_login_url()
-        headers = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'max-age=0',
-            'Connection': 'keep-alive',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-site',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1',
-            'User-Agent': self.user_agent,
-            'sec-ch-ua': '"Chromium";v="130", "Microsoft Edge";v="130", "Not?A_Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
+        login_url,session_still = self.get_login_url()
+        if session_still:
+            session_state,code = login_url,session_still
+        else:
+            headers = {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cache-Control': 'max-age=0',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-site',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1',
+                'User-Agent': self.user_agent,
+                'sec-ch-ua': '"Chromium";v="130", "Microsoft Edge";v="130", "Not?A_Brand";v="99"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                }
+            data = {
+                'username': self.username,
+                'password': self.password,
+                'locale': 'vi',
+                'rememberMe': 'on'
             }
-        data = {
-            'username': self.username,
-            'password': self.password,
-            'locale': 'vi',
-            'rememberMe': 'on'
-        }
-        self.load_cookies()
-        res = self.curl_post(login_url,headers=headers, data=data,proxies=self.proxies)
-        # with open("login_request.html", "w", encoding="utf-8") as file:
-        #     file.write(res.text)
-        self.save_cookies(self.session.cookies)
-        result = res.text
-        # print('url_after_login',res.url)
-        session_state,code = self.get_session_and_code(res.url)
+            self.load_cookies()
+            res = self.curl_post(login_url,headers=headers, data=data,proxies=self.proxies)
+            self.save_cookies(self.session.cookies)
+            result = res.text
+            # print('url_after_login',res.url)
+            session_state,code = self.get_session_and_code(res.url)
         if session_state and code:
             return {
                         'success': True,
@@ -270,7 +330,8 @@ class OCB:
         error_message = self.extract_error_message(result)
         pattern = r'action="(.*)"'
         matches = re.search(pattern, res.text)
-        url = matches.group(1).replace("amp;", "&").replace("&&", "&")
+        if matches:
+            url = matches.group(1).replace("amp;", "&").replace("&&", "&")
         
         if error_message == 'OMNI_03_MS01':
             error_code = 444
@@ -321,7 +382,6 @@ class OCB:
             }
         elif 'Xác thực đăng nhập' in result:
             request_login_result,request_url = self.send_request_login(url)
-            print('Xác thực đăng nhập')
             if 'Chúng tôi đã gửi yêu cầu xác thực tới thiết bị đăng ký của bạn, vui lòng kiểm tra và xác thực trong 2 phút.' in request_login_result:
                    return {
                         'success': True,
@@ -503,14 +563,12 @@ class OCB:
         # else:
         #     self.logout()
         return result
-    
-    def get_info(self):
+    def service_agreements(self):
         headers = {
         'Accept': 'application/json',
         'Accept-Language': 'vi',
         'Authorization': f'Bearer {self.auth_token}',
         'Connection': 'keep-alive',
-        'Cookie': 'BIGipServer~Omni_4.0~Omni_4.0_Pool=175270410.20480.0000; _ga=GA1.1.569260134.1730308709; TS01f4a2ea=014bffbef0e3341402ddc29a65cf0264ff88421e42d8e0c2dbb79e9e247ca0b023dfe2585d140b5388c4a0309e464914e8d5c78730d37b2b1cbc7beeb5725b3d37be973167; TS01e1866a=014bffbef0ac0ab2c3626e75f199d10c105e034aa8ae77ddcd182d8f79a80268755ab4f90cccb8bb1c97e78cbd54692d47a3078576; USER_CONTEXT=eyJraWQiOiJaNXB5dkxcL3FMYUFyR3ZiTkY3Qm11UGVQU1Q4R0I5UHBPR0RvRnBlbmIxOD0iLCJjdHkiOiJKV1QiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwiYWxnIjoiZGlyIn0..OTOdmkQAnoaPm5MsE1kDEw.gUS55wP5peyVWi9xIz2O49dO11Fi7XAo21E7z-iV8nJ12XOuT0Hn-kL7HK-XDfSAVmoZR-UiK76cGuH51kJu9bVbW0N3pJ1KQfxb8yuHwjXrqXzYswK0CmM_8WWq_tCqeVyKQKH1gvCbI9Hv8fzeOb2c21PnUUea-Y7GoR3cN_e5IPHOro3WGp6-N9D_4dby9hgxB_60fzZ1W2m4nL2qpMPuo0N3ISPvB87gTldQ-yVDZ472IriqcXtNoXTTIC4TsyaxD4dzCepEZ0mPcPCcTIBaS0_8_BZ1WD7Ia64Q4a_X6JpGfwg1Vj-s7CTZvM9d.EvUojthAum-N7i9faP-_tg; _ga_NJJ7PHJKV8=GS1.1.1730317030.3.1.1730317031.59.0.0; XSRF-TOKEN=9d57d065-5803-4d5e-a280-ef4f9f3e2404; TS01e1866a=014bffbef031e20e9fc98d327cfb58aef1091147abcd2693a28e811b6e902ebd34c56b1224a5e326e8c9fd2eebc07f1c91af336515',
         'Lang': 'vi',
         'Sec-Fetch-Dest': 'empty',
         'Sec-Fetch-Mode': 'cors',
@@ -522,9 +580,84 @@ class OCB:
         }
 
         self.load_cookies()
+        
+        url = 'https://ocbomni.ocb.com.vn/api/access-control/client-api/v3/accessgroups/user-context/service-agreements?from=0&size=7'
+        response = self.curl_get(url, headers=headers,proxies=self.proxies)
+        self.save_cookies(self.session.cookies)
+        # print(response.status_code)
+        # print('service_agreements',response.text)
+        if response.status_code == 200:
+            result = response.json()
+            self.serviceAgreementId = result[0]['id']
+            return result
+        else:
+            return None
+    def user_context(self):
+        xsrf_token = ""
+        # if self.cookies_file and os.path.exists(self.cookies_file):
+        #     with open(self.cookies_file, 'r') as file:
+        #         cookies = json.load(file)
+        #         xsrf_token = next((cookie['Value'] for cookie in cookies if cookie['Name'] == 'XSRF-TOKEN'), "")
+        # print('xsrf_token',xsrf_token)
+        headers = {
+        'Accept': 'application/json',
+        'Accept-Language': 'vi',
+        'Authorization': f'Bearer {self.auth_token}',
+        'Connection': 'keep-alive',
+        'Content-Type': 'application/json',
+        'Lang': 'vi',
+        'Origin': 'https://ocbomni.ocb.com.vn',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        'X-Geo': '',
+        'sec-ch-ua': '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        }
+
+        self.load_cookies()
+        # print(self.session.cookies)
+        payload = json.dumps({
+        "serviceAgreementId": self.serviceAgreementId
+        })
+        url = 'https://ocbomni.ocb.com.vn/api/access-control/client-api/v3/accessgroups/user-context'
+        response = self.curl_post(url, headers=headers,data=payload,proxies=self.proxies)
+        # print(response.cookies)
+        self.save_cookies(response.cookies)
+        # print('user_context',response,response.text)
+        if response.status_code == 200:
+            result = response.json()
+            return result
+        else:
+            return None
+    def get_info(self):
+        if not self.serviceAgreementId:
+            self.service_agreements()
+            self.user_context()
+        payload = {}
+        headers = {
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Authorization': f'Bearer {self.auth_token}',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        'sec-ch-ua': '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+        }
+
+        self.load_cookies()
+        
         url = 'https://ocbomni.ocb.com.vn/api/arrangement-manager/client-api/v2/arrangement-views/account-overview/groups/current-account-vnd?_limit=100'
         response = self.curl_get(url, headers=headers,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
+        # print(response.status_code)
+        # print(response.text)
         if response.status_code == 200:
             result = response.json()
             return result
@@ -626,7 +759,7 @@ class OCB:
         'Accept-Language': 'vi',
         'Authorization': f'Bearer {self.auth_token}',
         'Connection': 'keep-alive',
-        'Cookie': 'BIGipServer~Omni_4.0~Omni_4.0_Pool=175270410.20480.0000; _ga=GA1.1.569260134.1730308709; TS01f4a2ea=014bffbef0e3341402ddc29a65cf0264ff88421e42d8e0c2dbb79e9e247ca0b023dfe2585d140b5388c4a0309e464914e8d5c78730d37b2b1cbc7beeb5725b3d37be973167; TS01e1866a=014bffbef0ac0ab2c3626e75f199d10c105e034aa8ae77ddcd182d8f79a80268755ab4f90cccb8bb1c97e78cbd54692d47a3078576; USER_CONTEXT=eyJraWQiOiJaNXB5dkxcL3FMYUFyR3ZiTkY3Qm11UGVQU1Q4R0I5UHBPR0RvRnBlbmIxOD0iLCJjdHkiOiJKV1QiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwiYWxnIjoiZGlyIn0..OTOdmkQAnoaPm5MsE1kDEw.gUS55wP5peyVWi9xIz2O49dO11Fi7XAo21E7z-iV8nJ12XOuT0Hn-kL7HK-XDfSAVmoZR-UiK76cGuH51kJu9bVbW0N3pJ1KQfxb8yuHwjXrqXzYswK0CmM_8WWq_tCqeVyKQKH1gvCbI9Hv8fzeOb2c21PnUUea-Y7GoR3cN_e5IPHOro3WGp6-N9D_4dby9hgxB_60fzZ1W2m4nL2qpMPuo0N3ISPvB87gTldQ-yVDZ472IriqcXtNoXTTIC4TsyaxD4dzCepEZ0mPcPCcTIBaS0_8_BZ1WD7Ia64Q4a_X6JpGfwg1Vj-s7CTZvM9d.EvUojthAum-N7i9faP-_tg; _ga_NJJ7PHJKV8=GS1.1.1730317030.3.1.1730317031.59.0.0; XSRF-TOKEN=9d57d065-5803-4d5e-a280-ef4f9f3e2404; TS01e1866a=014bffbef031e20e9fc98d327cfb58aef1091147abcd2693a28e811b6e902ebd34c56b1224a5e326e8c9fd2eebc07f1c91af336515',
+        # 'Cookie': 'BIGipServer~Omni_4.0~Omni_4.0_Pool=175270410.20480.0000; _ga=GA1.1.569260134.1730308709; TS01f4a2ea=014bffbef0e3341402ddc29a65cf0264ff88421e42d8e0c2dbb79e9e247ca0b023dfe2585d140b5388c4a0309e464914e8d5c78730d37b2b1cbc7beeb5725b3d37be973167; TS01e1866a=014bffbef0ac0ab2c3626e75f199d10c105e034aa8ae77ddcd182d8f79a80268755ab4f90cccb8bb1c97e78cbd54692d47a3078576; USER_CONTEXT=eyJraWQiOiJaNXB5dkxcL3FMYUFyR3ZiTkY3Qm11UGVQU1Q4R0I5UHBPR0RvRnBlbmIxOD0iLCJjdHkiOiJKV1QiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwiYWxnIjoiZGlyIn0..OTOdmkQAnoaPm5MsE1kDEw.gUS55wP5peyVWi9xIz2O49dO11Fi7XAo21E7z-iV8nJ12XOuT0Hn-kL7HK-XDfSAVmoZR-UiK76cGuH51kJu9bVbW0N3pJ1KQfxb8yuHwjXrqXzYswK0CmM_8WWq_tCqeVyKQKH1gvCbI9Hv8fzeOb2c21PnUUea-Y7GoR3cN_e5IPHOro3WGp6-N9D_4dby9hgxB_60fzZ1W2m4nL2qpMPuo0N3ISPvB87gTldQ-yVDZ472IriqcXtNoXTTIC4TsyaxD4dzCepEZ0mPcPCcTIBaS0_8_BZ1WD7Ia64Q4a_X6JpGfwg1Vj-s7CTZvM9d.EvUojthAum-N7i9faP-_tg; _ga_NJJ7PHJKV8=GS1.1.1730317030.3.1.1730317031.59.0.0; XSRF-TOKEN=9d57d065-5803-4d5e-a280-ef4f9f3e2404; TS01e1866a=014bffbef031e20e9fc98d327cfb58aef1091147abcd2693a28e811b6e902ebd34c56b1224a5e326e8c9fd2eebc07f1c91af336515',
         'Lang': 'vi',
         'Sec-Fetch-Dest': 'empty',
         'Sec-Fetch-Mode': 'cors',
@@ -837,9 +970,7 @@ class OCB:
             'transferType':'NAPAS_ACCOUNT_NUMBER'
         })
         response = requests.post(url,headers=headers, data=data,proxies=self.proxies)
-        # self.save_cookies(self.session.cookies)
-        # with open("transaction"+str(page)+".html", "w", encoding="utf-8") as file:
-        #     file.write(response.text)
+
         if response.status_code == 200:
             result = response.json()
             return result
@@ -925,10 +1056,9 @@ class OCB:
 def loginOCB(user):
     session_state,code = None,None
     refresh_token = user.do_refresh_token()
-    # print(refresh_token)
     if 'access_token' not in refresh_token:
         login = user.do_login()
-        print(login)
+        print('login',login)
         if login and 'success' in login and login['success']:
             if 'waiting' in login and login['waiting']:
                 url = login['url']
@@ -982,19 +1112,20 @@ def loginOCB(user):
 
 def sync_balance_ocb(user):
     ary_info = user.get_info()
-    # print(ary_info)
-    for element in ary_info.get("elements", []):
-        if element["attributes"]["bban"]["value"] == user.account_number:
-            user.balance =  int(element["attributes"]["availableBalance"]["value"])
-            user.id = (element["id"])
-            user.save_data()
-            return {
-                'success': True,
-                'data':{
-                    'balance': user.balance,
-                },
-                'code': 200
-            }
+    # print('ary_info',ary_info)
+    if ary_info:
+        for element in ary_info.get("elements", []):
+            if element["attributes"]["bban"]["value"] == user.account_number:
+                user.balance =  int(element["attributes"]["availableBalance"]["value"])
+                user.id = (element["id"])
+                user.save_data()
+                return {
+                    'success': True,
+                    'data':{
+                        'balance': user.balance,
+                    },
+                    'code': 200
+                }
     return {
             'success': False,
             'message': 'Please relogin!',
