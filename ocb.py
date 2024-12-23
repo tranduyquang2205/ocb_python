@@ -185,10 +185,8 @@ class OCB:
             with open(self.cookies_file, 'rb') as file:
                 loaded_cookies = pickle.load(file)
             self.session.cookies.update(loaded_cookies)
-        except FileNotFoundError:
-            print(f"File not found.")
         except Exception as e:
-            print(f"An error occurred: {e}")
+            return False
     def curl_post(self, url,headers,data,proxies=None,allow_redirects=False):
         try:
             
