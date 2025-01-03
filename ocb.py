@@ -276,10 +276,13 @@ class OCB:
         }
         self.load_cookies()
         res = self.curl_post(request_url,headers=headers, data=data,proxies=self.proxies)
-        # with open("request_login.html", "w", encoding="utf-8") as file:
-        #     file.write(res.text)
+        with open("request_login.html", "w", encoding="utf-8") as file:
+            file.write(res.text)
         self.save_cookies(self.session.cookies)
-        result = res.text
+        if res:
+            result = res.text
+        else:
+            result = None
         pattern = r'action="(.*)" method'
         matches = re.search(pattern, res.text)
         url = matches.group(1).replace("amp;", "&").replace("&&", "&")

@@ -105,3 +105,4 @@ data/data/*/*/*.json
 data/ocb/*/*/*.json
 data/ocb/cookies/*.json
 data/ocb/users/*.json
+.codegpt
