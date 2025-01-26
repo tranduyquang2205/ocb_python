@@ -725,12 +725,12 @@ class OCB:
         response = self.curl_post(url, headers=headers, data=payload,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
         return response
-    def get_transactions(self, from_date="2022-11-15", to_date="2022-12-03",limit=100):
+    def get_transactions(self, from_date="2022-11-15", to_date="2022-12-03",limit=30):
         list_transactions = []
-        if limit > 500:
-            page = limit//500
+        if limit > 30:
+            page = limit//30
             for i in range(0,page+1):
-                n_limit = 500
+                n_limit = 30
                 item_transactions = self.get_transactions_by_page(from_date, to_date,n_limit,i)
                 if len(item_transactions) == 0:
                     break
