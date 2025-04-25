@@ -1062,7 +1062,7 @@ class OCB:
 def loginOCB(user):
     session_state,code = None,None
     refresh_token = user.do_refresh_token()
-    if 'access_token' not in refresh_token:
+    if not refresh_token or 'access_token' not in refresh_token:
         login = user.do_login()
         print('login',login)
         if login and 'success' in login and login['success']:
