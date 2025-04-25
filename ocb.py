@@ -300,7 +300,7 @@ class OCB:
         url = matches.group(1).replace("amp;", "&").replace("&&", "&")
         return result,url
         
-    def do_login(self):
+    def do_login(self, retry = False):
         print('get_login_url')
         login_url,session_still = self.get_login_url()
         if session_still:
@@ -331,6 +331,11 @@ class OCB:
             res = self.curl_post(login_url,headers=headers, data=data,proxies=self.proxies)
             self.save_cookies(self.session.cookies)
             result = res.text
+            if not result and not retry:
+                self.reset_cookies()
+                return self.do_login(retry=True)
+
+    
             # print('url_after_login',res.url)
             session_state,code = self.get_session_and_code(res.url)
         if session_state and code:
