@@ -175,6 +175,18 @@ class OCB:
     #             'https': f'http://{username_proxy}:{password_proxy}@{proxy_host}:{proxy_port}'
     #         }
     #         print(f"New proxy: {self.proxies}")
+    def reset_cookies(self):
+        """Clear session cookies and delete the cookie file."""
+        # Clear cookies from the current session
+        self.session.cookies.clear()
+        
+        # Delete the cookie file if it exists
+        if os.path.exists(self.cookies_file):
+            try:
+                os.remove(self.cookies_file)
+            except Exception as e:
+                # Handle exception if needed, or just pass
+                pass
     def save_cookies(self,s):
         """Save the current session to a file."""
         with open(self.cookies_file, 'wb') as file:
@@ -289,6 +301,7 @@ class OCB:
         return result,url
         
     def do_login(self):
+        print('get_login_url')
         login_url,session_still = self.get_login_url()
         if session_still:
             session_state,code = login_url,session_still
@@ -1063,6 +1076,7 @@ def loginOCB(user):
     session_state,code = None,None
     refresh_token = user.do_refresh_token()
     if not refresh_token or 'access_token' not in refresh_token:
+        user.reset_cookies()
         login = user.do_login()
         print('login',login)
         if login and 'success' in login and login['success']:
