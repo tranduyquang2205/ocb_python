@@ -557,6 +557,8 @@ class OCB:
         self.load_cookies()
         response = self.curl_post('https://identity-omni.ocb.com.vn/auth/realms/backbase/protocol/openid-connect/token', data=data, headers=headers,proxies=self.proxies)
         self.save_cookies(self.session.cookies)
+        if not response:
+            return response
         try:
             result = response.json()
         except json.JSONDecodeError:
