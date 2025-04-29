@@ -42,6 +42,8 @@ class OCB:
         self.identification_id = None
         self.name_account = None
         self.is_login = False
+        self.time_login = time.time()
+        self.time_refresh = time.time()
         self.balance = None
         self.id = None
         self.fullname = None
@@ -55,6 +57,8 @@ class OCB:
             self.auth_token = None
             self.refresh_token = None
             self.is_login = False
+            self.time_login = time.time()
+            self.time_refresh = time.time()
             self.pending_transfer = []
             self.user_agent = self.get_user_agent()
             self.save_data()
@@ -68,7 +72,7 @@ class OCB:
 
         self.init_data()
     def extract_error_message(self,html_content):
-        pattern = r'<span\s+id="template-error-message"\s+class="bb-input-validation-message d-flex justify-content-center hidden"\s+aria-live="polite"\s*>(.*)</span>'
+        pattern = r'<span\s+id="template-error-msg"\s+class="bb-input-validation-message d-flex justify-content-center hidden"\s+aria-live="polite"\s*>(.*)</span>'
         match = re.search(pattern, html_content)
         return match.group(1) if match else None
     def init_data(self):
@@ -90,14 +94,17 @@ class OCB:
             'auth_token': self.auth_token,
             'refresh_token': self.refresh_token,
             'pending_transfer': self.pending_transfer,
-            'user_agent': self.user_agent
+            'user_agent': self.user_agent,
+            'time_login': self.time_login,
+            'time_refresh': self.time_refresh,
         }
         with open(f"data/ocb/users/{self.account_number}.json", 'w') as file:
             json.dump(data, file)
     def set_token(self, data):
         self.auth_token = data['access_token']
         self.refresh_token = data['refresh_token']
-        self.time_set_token = time.time()
+        self.is_login = True
+        self.time_refresh = time.time()
     def parse_data(self):
         with open(f"data/ocb/users/{self.account_number}.json", 'r') as file:
             data = json.load(file)
@@ -113,6 +120,8 @@ class OCB:
             self.refresh_token = data['refresh_token']
             self.pending_transfer = data['pending_transfer']
             self.user_agent = data['user_agent']
+            self.time_login = data['time_login']
+            self.time_refresh = data['time_refresh']
     # def save_cookies(self, cookie_jar):
     #     # Load existing cookies from the file if it exists
     #     if os.path.exists(self.cookies_file):
@@ -339,6 +348,10 @@ class OCB:
             # print('url_after_login',res.url)
             session_state,code = self.get_session_and_code(res.url)
         if session_state and code:
+            self.is_login = True
+            self.time_login = time.time()
+            self.time_refresh = time.time()
+            self.save_data()
             return {
                         'success': True,
                         'code': 200,
@@ -347,11 +360,11 @@ class OCB:
                         'code': code
                    }
         error_message = self.extract_error_message(result)
-        pattern = r'action="(.*)"'
+        pattern = r'action="([^"\s]+)"'
         matches = re.search(pattern, res.text)
         if matches:
             url = matches.group(1).replace("amp;", "&").replace("&&", "&")
-        
+        print('url',url,error_message)
         if error_message == 'OMNI_03_MS01':
             error_code = 444
             error_message_details = 'Tên đăng nhập hoặc mật khẩu không đúng. Tài khoản của bạn sẽ bị khóa nếu nhập sai 5 lần.'
@@ -1032,6 +1045,7 @@ class OCB:
                 return output_name
         return False
     def login_ocb(self,ben_account_number=None, bank_name=None):
+
         login = self.do_login()
         if login and 'success' in login and login['success']:
             print('waiting')
@@ -1053,14 +1067,25 @@ class OCB:
                         if status == "PENDING":
                             time.sleep(2)
                         else:
+                            self.is_login = True
+                            self.time_login = time.time()
+                            self.time_refresh = time.time()
+                            self.save_data()
                             print('login success')
                             break
                     i += 1
             elif 'session_state' in login:
-                print('login success')
+                self.is_login = True
+                self.time_login = time.time()
+                self.time_refresh = time.time()
+                self.save_data()
                 session_state = login['session_state']
                 code = login['code']
             else:
+                self.is_login = True
+                self.time_login = time.time()
+                self.time_refresh = time.time()
+                self.save_data()
                 print('login success')
         else:
             return login
@@ -1092,6 +1117,8 @@ def loginOCB(user):
                 while True:
                     if i >= 60:
                         return {
+                            'success': False,
+
                             'code':408,
                             'message':'Time out confirm!',
                         }
@@ -1103,17 +1130,34 @@ def loginOCB(user):
                         if status == "PENDING":
                             time.sleep(2)
                         else:
+                            user.is_login = True
+                            user.time_login = time.time()
+                            user.time_refresh = time.time()
+                            user.save_data()
                             print('login success')
                             break
                     i += 1
             elif 'session_state' in login:
+                user.is_login = True
+                user.time_login = time.time()
+                user.time_refresh = time.time()
+                user.save_data()
                 print('login success')
                 session_state = login['session_state']
                 code = login['code']
             else:
+                user.is_login = True
+                user.time_login = time.time()
+                user.time_refresh = time.time()
+                user.save_data()
                 print('login success')
         else:
-            return login
+            return {
+                            'success': False,
+                            'data':login,
+                            'code':500,
+                            'message':'Login failed!',
+                        }
         if not code:
             continue_check = user.continue_check_session(url)
             if continue_check:
@@ -1127,7 +1171,11 @@ def loginOCB(user):
             else:
                 return(0)
         except Exception as e:
-            return(e)
+            return {
+                'success': False,
+                'message': str(e),  
+                'code':500,
+            }
     else:
         result = sync_balance_ocb(user)
         result['message'] = 'Đăng nhập thành công'
@@ -1136,6 +1184,12 @@ def loginOCB(user):
 
 
 def sync_balance_ocb(user):
+    # if not user.is_login:
+    #     login = loginOCB(user)
+    #     if not login or 'success' not in login or not login['success']:
+    #         return login
+    if time.time() - user.time_refresh > 850:
+        user.do_refresh_token()
     ary_info = user.get_info()
     # print('ary_info',ary_info)
     if ary_info:
@@ -1147,18 +1201,26 @@ def sync_balance_ocb(user):
                 return {
                     'success': True,
                     'data':{
+                        'account_number': user.account_number,
                         'balance': user.balance,
                     },
                     'code': 200
                 }
+        
     return {
             'success': False,
             'message': 'Please relogin!',
-            'code': 401
+            'code': 401,
+            'data': ary_info
             }
 
 def sync_ocb(user, start, end,limit):
-    user.do_refresh_token()
+    if not user.is_login:
+        login = loginOCB(user)
+        if not login or 'success' not in login or not login['success']:
+            return login
+    if time.time() - user.time_refresh > 850:
+        user.do_refresh_token()
     ary_data = user.get_transactions(start, end,limit)
     # print(ary_data)
     if not ary_data:
@@ -1171,7 +1233,8 @@ def sync_ocb(user, start, end,limit):
         return {
             'success': False,
             'message': 'Please relogin!',
-            'code': 401
+            'code': 401,
+            'data': ary_data
         }
 
 
