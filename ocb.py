@@ -312,6 +312,7 @@ class OCB:
     def do_login(self, retry = False):
         print('get_login_url')
         login_url,session_still = self.get_login_url()
+        print(login_url,session_still)
         if session_still:
             session_state,code = login_url,session_still
         else:
@@ -337,11 +338,13 @@ class OCB:
                 'rememberMe': 'on'
             }
             self.load_cookies()
-            res = self.curl_post(login_url,headers=headers, data=data,proxies=self.proxies)
+            res = self.curl_post(login_url,headers=headers, data=data,proxies=self.proxies, allow_redirects=True)
             self.save_cookies(self.session.cookies)
             result = res.text
+            # with open("login.html", "w", encoding="utf-8") as file:
+            #     file.write(result)
             if not result and not retry:
-                self.reset_cookies()
+                # self.reset_cookies()
                 return self.do_login(retry=True)
 
     
