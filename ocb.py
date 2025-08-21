@@ -1186,11 +1186,11 @@ def loginOCB(user):
     
 
 
-def sync_balance_ocb(user):
-    # if not user.is_login:
-    #     login = loginOCB(user)
-    #     if not login or 'success' not in login or not login['success']:
-    #         return login
+def sync_balance_ocb(user,retry = False):
+    if not user.is_login:
+        login = loginOCB(user)
+        if not login or 'success' not in login or not login['success']:
+            return login
     if time.time() - user.time_refresh > 850:
         user.do_refresh_token()
     ary_info = user.get_info()
@@ -1209,15 +1209,19 @@ def sync_balance_ocb(user):
                     },
                     'code': 200
                 }
-        
-    return {
-            'success': False,
-            'message': 'Please relogin!',
-            'code': 401,
-            'data': ary_info
-            }
+    else:
+        if not retry:
+            user.is_login = False
+            user.save_data()
+            return sync_balance_ocb(user, retry=True)
+        return {
+                'success': False,
+                'message': 'Please relogin!',
+                'code': 401,
+                'data': ary_info
+                }
 
-def sync_ocb(user, start, end,limit):
+def sync_ocb(user, start, end,limit,retry=False):
     if not user.is_login:
         login = loginOCB(user)
         if not login or 'success' not in login or not login['success']:
@@ -1232,14 +1236,17 @@ def sync_ocb(user, start, end,limit):
             'message': 'Không tìm thấy lịch sử giao dịch',
             'code': 200
         }
-    if ('code' in ary_data and ary_data['code'] == 401) or ('error' in ary_data and ary_data['error'] == 'Unauthorized'):
+    if  (ary_data and 'code' in ary_data and ary_data['code'] == 401) or ('error' in ary_data and ary_data['error'] == 'Unauthorized'):
+        if not retry:
+            user.is_login = False
+            user.save_data()
+            return sync_ocb(user, start, end, limit, retry=True)
         return {
             'success': False,
             'message': 'Please relogin!',
             'code': 401,
             'data': ary_data
         }
-
 
     return {
         'success': True,
@@ -1255,23 +1262,3 @@ def get_key_pos_number(number):
     line = (number - 1) // 3 + 1
     pos = (number - 1) % 3 + 1
     return f"{line}_{pos}"
-# if __name__ == '__main__':
-    # Example usage of the OCB class
-    # while True:
-        # user = OCB("0338549217", "Matkhau123123@", "9338549517", "")
-        # # user = OCB("0358027860", "Dinh5500@", "19033744815017", "")
-
-        # #un comment login for first time, after that just call sync_balance_ocb or sync_ocb
-
-        # loginOCB(user)
-
-        # balance = sync_balance_ocb(user)
-        # print(balance)
-        # transactions = sync_ocb(user,"2024-04-01","2024-04-04",10000000)
-        # print(transactions)
-        # file_path = "output_tcb_04.04.json"
-        # with open(file_path, 'w') as json_file:
-        #     json.dump(transactions, json_file, indent=4)
-
-        # print(f"JSON data has been saved to {file_path}")
-        # time.sleep(30)
