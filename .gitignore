@@ -107,3 +107,4 @@ data/ocb/cookies/*.json
 data/ocb/users/*.json
 .codegpt
 data/*/*.pkl
+data/ocb/cookies/*.pkl
