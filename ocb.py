@@ -1181,6 +1181,7 @@ def loginOCB(user):
             }
     else:
         result = sync_balance_ocb(user)
+        print(result)
         result['message'] = 'Đăng nhập thành công'
         return(result)
     
